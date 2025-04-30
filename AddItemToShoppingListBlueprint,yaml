@@ -1,0 +1,111 @@
+blueprint:
+  name: Flexible Shopping List Manager with Notification
+  description: >
+    Ensures a given item is on a user-selected shopping list. If the item doesn't exist,
+    it will be added. If it exists but is completed, it will be marked as "needs action".
+    Optionally, notify the user's mobile app when this happens.
+  domain: automation
+  input:
+    user_trigger:
+      name: Trigger
+      description: Select the trigger to initiate this automation.
+      selector:
+        trigger: {}
+
+    user_condition:
+      name: Condition
+      description: Optionally define a condition that must be true for the actions to run.
+      default: []
+      selector:
+        condition: {}
+
+    item_to_add:
+      name: Item to Add
+      description: The shopping list item to ensure is present.
+      selector:
+        text: {}
+
+    shopping_list_entity:
+      name: Shopping List Entity
+      description: Select your shopping list entity (must be a todo entity).
+      selector:
+        entity:
+          domain: todo #Ingore the warning, it is working!
+
+    notify_target:
+      name: Mobile App Notify Target (Optional)
+      description: Select your mobile app notification service (e.g. notify.mobile_app_your_device).
+      default: ""
+      selector:
+        device:
+          integration: mobile_app
+
+mode: single
+
+trigger: !input user_trigger
+
+condition: !input user_condition
+
+action:
+  - variables:
+      item_to_add: !input item_to_add
+      shopping_list: !input shopping_list_entity
+      notify_target: !input notify_target
+
+  - target:
+      entity_id: "{{ shopping_list }}"
+    response_variable: shopping_list_items
+    action: todo.get_items
+    data: {}
+
+  - target:
+      entity_id: "{{ shopping_list }}"
+    response_variable: shopping_list_items2
+    action: todo.get_items
+    data:
+      status:
+        - completed
+
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: >-
+              {{ item_to_add not in
+              shopping_list_items[shopping_list]['items']
+              | map(attribute='summary') | list }}
+        sequence:
+          - data:
+              item: "{{ item_to_add }}"
+            target:
+              entity_id: "{{ shopping_list }}"
+            action: todo.add_item
+
+      - conditions:
+          - condition: template
+            value_template: >-
+              {{ item_to_add in
+              shopping_list_items2[shopping_list]['items']
+              | map(attribute='summary') | list }}
+        sequence:
+          - action: todo.update_item
+            target:
+              entity_id: "{{ shopping_list }}"
+            data:
+              item: "{{ item_to_add }}"
+              status: needs_action
+
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ notify_target != '' }}"
+        sequence:
+          - service: notify.mobile_app_{{ notify_target | device_attr('name') | lower | replace(' ', '_') }}
+            data:
+              title: "{{ this.name }}"
+              message: >
+                {{ item_to_add }} added to your shopping list.
+              data:
+                actions:
+                  - action: URI
+                    title: Open List
+                    uri: /todo?entity_id={{ shopping_list }}
